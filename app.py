@@ -9,11 +9,8 @@ app.secret_key = 'supersecretkey'
 
 # --- Connect to Postgres ---
 def get_db_connection():
-    db_url = os.environ.get('DATABASE_URL')
-    if not db_url:
-        raise Exception("❗ DATABASE_URL environment variable not set ❗")
-    print("✅ Using DATABASE_URL:", db_url)
-    return psycopg2.connect(db_url)
+    conn = psycopg2.connect(os.environ['DATABASE_URL'])
+    return conn
 
 # --- Initialize Tables ---
 def init_db():
@@ -148,7 +145,12 @@ def logout():
     return redirect('/')
 
 # --- Initialize DB on App Start ---
-init_db()
+with app.app_context():
+    init_db()
+
+# --- Required for Gunicorn ---
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080)
 
 
 
