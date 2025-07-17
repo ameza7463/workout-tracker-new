@@ -2,6 +2,7 @@ from flask import Flask, render_template, request, redirect, session
 import sqlite3
 import json
 from datetime import datetime
+import os
 
 app = Flask(__name__)
 app.secret_key = 'supersecretkey'
@@ -140,7 +141,6 @@ def logout():
 if __name__ == '__main__':
     init_db()
     init_workout_db()
-    import os
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
 
