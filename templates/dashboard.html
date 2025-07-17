@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard</title>
+</head>
+<body>
+    <h1>Welcome, {{ user }}</h1>
+    <a href="/logout">Logout</a>
+
+    <h2>Add Workout</h2>
+    <form method="POST">
+        <input type="date" name="date" value="{{ now }}" required>
+        <textarea name="notes" placeholder="Notes"></textarea>
+        <input type="text" name="exercise" placeholder="Exercise Name" required>
+        <input type="number" name="sets" placeholder="Sets" required>
+        <input type="number" name="reps" placeholder="Reps" required>
+        <input type="number" name="weight" placeholder="Weight" required>
+        <button type="submit">Add Workout</button>
+    </form>
+
+    <h2>Your Workouts</h2>
+    {% for workout in workouts %}
+        <div>
+            <h3>{{ workout.date }}</h3>
+            <p>{{ workout.notes }}</p>
+            <ul>
+                {% for ex in workout.exercises %}
+                    <li>{{ ex.Exercise }} — {{ ex.Sets }} sets — {{ ex.Reps }} reps @ {{ ex.Weight }} lbs</li>
+                {% endfor %}
+            </ul>
+            <a href="/delete/{{ workout.id }}">Delete</a>
+        </div>
+    {% endfor %}
+</body>
+</html>
