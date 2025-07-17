@@ -9,8 +9,11 @@ app.secret_key = 'supersecretkey'
 
 # --- Connect to Postgres ---
 def get_db_connection():
-    conn = psycopg2.connect(os.environ['DATABASE_URL'])
-    return conn
+    db_url = os.environ.get('DATABASE_URL')
+    if not db_url:
+        raise Exception("❗ DATABASE_URL environment variable not set ❗")
+    print("✅ Using DATABASE_URL:", db_url)
+    return psycopg2.connect(db_url)
 
 # --- Initialize Tables ---
 def init_db():
@@ -146,6 +149,7 @@ def logout():
 
 # --- Initialize DB on App Start ---
 init_db()
+
 
 
 
