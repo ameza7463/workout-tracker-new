@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, redirect, session
-import sqlite3
+import psycopg2
 import json
 from datetime import datetime
 import os
@@ -7,43 +7,47 @@ import os
 app = Flask(__name__)
 app.secret_key = 'supersecretkey'
 
-# --- User DB Init ---
-def init_db():
-    conn = sqlite3.connect('users.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT, password TEXT)''')
-    conn.commit()
-    conn.close()
+# --- Connect to Postgres ---
+def get_db_connection():
+    conn = psycopg2.connect(os.environ['DATABASE_URL'])
+    return conn
 
-# --- Workout DB Init ---
-def init_workout_db():
-    conn = sqlite3.connect('workouts.db')
-    c = conn.cursor()
-    c.execute('''
+# --- Initialize Tables ---
+def init_db():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            email TEXT UNIQUE,
+            password TEXT
+        )
+    ''')
+    cur.execute('''
         CREATE TABLE IF NOT EXISTS workouts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_email TEXT,
             date TEXT,
             notes TEXT,
-            exercises TEXT
+            exercises JSONB
         )
     ''')
     conn.commit()
+    cur.close()
     conn.close()
 
 # --- Routes ---
-
 @app.route('/', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         email = request.form['email']
         password = request.form['password']
 
-        conn = sqlite3.connect('users.db')
-        c = conn.cursor()
-        c.execute('SELECT * FROM users WHERE email=? AND password=?', (email, password))
-        user = c.fetchone()
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('SELECT * FROM users WHERE email = %s AND password = %s', (email, password))
+        user = cur.fetchone()
+        cur.close()
         conn.close()
 
         if user:
@@ -59,10 +63,11 @@ def signup():
     email = request.form['email']
     password = request.form['password']
 
-    conn = sqlite3.connect('users.db')
-    c = conn.cursor()
-    c.execute('INSERT INTO users (email, password) VALUES (?, ?)', (email, password))
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('INSERT INTO users (email, password) VALUES (%s, %s) ON CONFLICT (email) DO NOTHING', (email, password))
     conn.commit()
+    cur.close()
     conn.close()
 
     return redirect('/')
@@ -91,29 +96,30 @@ def dashboard():
                 "Weight": weight[i]
             })
 
-        conn = sqlite3.connect('workouts.db')
-        c = conn.cursor()
-        c.execute('INSERT INTO workouts (user_email, date, notes, exercises) VALUES (?, ?, ?, ?)',
-                  (user, date, notes, json.dumps(exercise_data)))
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('INSERT INTO workouts (user_email, date, notes, exercises) VALUES (%s, %s, %s, %s)',
+                    (user, date, notes, json.dumps(exercise_data)))
         conn.commit()
+        cur.close()
         conn.close()
 
         return redirect('/dashboard')
 
-    # Load workouts
-    conn = sqlite3.connect('workouts.db')
-    c = conn.cursor()
-    c.execute('SELECT * FROM workouts WHERE user_email=? ORDER BY date DESC', (user,))
-    workouts = c.fetchall()
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id, date, notes, exercises FROM workouts WHERE user_email = %s ORDER BY date DESC', (user,))
+    workouts = cur.fetchall()
+    cur.close()
     conn.close()
 
     workout_list = []
     for w in workouts:
         workout_list.append({
             'id': w[0],
-            'date': w[2],
-            'notes': w[3],
-            'exercises': json.loads(w[4])
+            'date': w[1],
+            'notes': w[2],
+            'exercises': w[3]
         })
 
     now = datetime.now().strftime('%Y-%m-%d')
@@ -124,10 +130,11 @@ def delete_workout(workout_id):
     if 'user' not in session:
         return redirect('/')
 
-    conn = sqlite3.connect('workouts.db')
-    c = conn.cursor()
-    c.execute('DELETE FROM workouts WHERE id=?', (workout_id,))
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('DELETE FROM workouts WHERE id = %s', (workout_id,))
     conn.commit()
+    cur.close()
     conn.close()
 
     return redirect('/dashboard')
@@ -137,9 +144,9 @@ def logout():
     session.pop('user', None)
     return redirect('/')
 
-# --- Run ---
+# --- Initialize DB on App Start ---
 init_db()
-init_workout_db()
+
 
 
 
