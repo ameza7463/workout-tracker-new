@@ -140,7 +140,8 @@ def logout():
 if __name__ == '__main__':
     init_db()
     init_workout_db()
-    app.run(host='0.0.0.0', port=81)
+    app.run(host='0.0.0.0', port=5000)
+
 
 
 
