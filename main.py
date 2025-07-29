@@ -12,8 +12,8 @@ st.set_page_config(page_title="Workout Tracker", layout="centered")
 st.title("🏋️ Workout Tracker")
 
 # --- Supabase setup ---
-SUPABASE_URL = "https://erqkbyteeiihakagetad.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVycWtieXRlZWlpaGFrYWdldGFkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI2MTg1MzgsImV4cCI6MjA2ODE5NDUzOH0.hQjJZ3Xlk3nhk824ZJlOGfpokNg5e_f2_jbNP2I9Ass"
+SUPABASE_URL = st.secrets["https://erqkbyteeiihakagetad.supabase.co"]
+SUPABASE_KEY = st.secrets["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVycWtieXRlZWlpaGFrYWdldGFkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI2MTg1MzgsImV4cCI6MjA2ODE5NDUzOH0.hQjJZ3Xlk3nhk824ZJlOGfpokNg5e_f2_jbNP2I9Ass"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- Cookie manager ---
@@ -101,10 +101,8 @@ if st.session_state.current_exercises:
 # --- Save Workout to Supabase ---
 if st.button("📂 Save Workout"):
     if st.session_state.current_exercises:
-        supabase.auth.set_session({
-            "access_token": st.session_state.access_token,
-            "refresh_token": st.session_state.refresh_token
-        })
+        supabase.auth.set_session(st.session_state.access_token, st.session_state.refresh_token)
+
         supabase.table("workouts").insert({
             "user_id": user_id,
             "date": str(datetime.date.today()),
