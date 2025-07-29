@@ -12,8 +12,8 @@ st.set_page_config(page_title="Workout Tracker", layout="centered")
 st.title("🏋️ Workout Tracker")
 
 # --- Supabase setup ---
-SUPABASE_URL = st.secrets["https://erqkbyteeiihakagetad.supabase.co"]
-SUPABASE_KEY = st.secrets["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVycWtieXRlZWlpaGFrYWdldGFkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI2MTg1MzgsImV4cCI6MjA2ODE5NDUzOH0.hQjJZ3Xlk3nhk824ZJlOGfpokNg5e_f2_jbNP2I9Ass"]
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- Cookie manager ---

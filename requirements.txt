@@ -2,3 +2,4 @@ streamlit
 pandas
 supabase
 st-cookie-manager
+git+https://github.com/AI-Yash/st-cookie-manager.git
