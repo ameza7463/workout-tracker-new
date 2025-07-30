@@ -5,7 +5,8 @@ import uuid
 import os
 import time
 from supabase import create_client, Client
-from st_cookie_manager.cookie_manager import CookieManager
+from st_cookie_manager import CookieManager
+
 
 # --- Page config ---
 st.set_page_config(page_title="Workout Tracker", layout="centered")
@@ -17,19 +18,20 @@ SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- Cookie manager ---
-cookie_manager = CookieManager()
-
-# --- Read cookies on load ---
-from st_cookie_manager import CookieManager, CookiesNotReady
+from st_cookie_manager import CookieManager
 
 cookie_manager = CookieManager()
 
 try:
     access_token = cookie_manager.get("access_token")
-    refresh_token = cookie_manager.get("refresh_token")
-except CookiesNotReady:
+except Exception:
     access_token = None
+
+try:
+    refresh_token = cookie_manager.get("refresh_token")
+except Exception:
     refresh_token = None
+
 
 
 if access_token and refresh_token:
