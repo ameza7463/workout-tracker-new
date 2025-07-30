@@ -20,8 +20,16 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 cookie_manager = CookieManager()
 
 # --- Read cookies on load ---
-access_token = cookie_manager.get("access_token")
-refresh_token = cookie_manager.get("refresh_token")
+from st_cookie_manager import CookieManager, CookiesNotReady
+
+cookie_manager = CookieManager()
+
+try:
+    access_token = cookie_manager.get("access_token")
+    refresh_token = cookie_manager.get("refresh_token")
+except CookiesNotReady:
+    access_token = None
+    refresh_token = None
 
 
 if access_token and refresh_token:
