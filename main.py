@@ -20,7 +20,16 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 cookie_manager = CookieManager()
 
 # --- Read cookies on load ---
-access_token = cookie_manager.get("access_token")
+from st_cookie_manager import CookieManager
+import streamlit as st
+
+cookie_manager = CookieManager()
+
+access_token = None
+cookies = cookie_manager.get_all()
+if cookies and "access_token" in cookies:
+    access_token = cookies["access_token"]
+
 refresh_token = cookie_manager.get("refresh_token")
 
 if access_token and refresh_token:
