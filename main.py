@@ -5,7 +5,7 @@ from st_cookies_manager import EncryptedCookieManager
 
 # ========= Config =========
 st.set_page_config(page_title="Workout Tracker", page_icon="💪", layout="centered")
-DEBUG = True  # turn False after it works
+DEBUG = True  # set False after it works
 
 # Read from Streamlit Secrets
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "")
@@ -22,7 +22,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 cookies = EncryptedCookieManager(prefix=COOKIE_PREFIX, password=COOKIE_PASSWORD)
 if not cookies.ready():
-    st.stop()  # wait for component to init
+    st.stop()
 
 def save_tokens_from_session(sess):
     if not sess:
@@ -36,6 +36,9 @@ def clear_tokens():
         if k in cookies:
             del cookies[k]
     cookies.save()
+    for k in ("user_id", "user_email"):
+        if k in st.session_state:
+            del st.session_state[k]
 
 def restore_session():
     at = cookies.get("access_token")
@@ -53,13 +56,24 @@ def restore_session():
 if "session_restored" not in st.session_state:
     st.session_state.session_restored = restore_session()
 
+# Robust "current user": prefer what we stored at login
 def get_current_user():
+    uid = st.session_state.get("user_id")
+    email = st.session_state.get("user_email")
+    if uid and email:
+        return {"id": uid, "email": email}
+    # Fallback: try Supabase (may be None on some builds)
     try:
-        return supabase.auth.get_user().user
+        res = supabase.auth.get_user()
+        user = getattr(res, "user", None)
+        if user and getattr(user, "id", None):
+            st.session_state["user_id"] = user.id
+            st.session_state["user_email"] = user.email
+            return {"id": user.id, "email": user.email}
     except Exception as e:
         if DEBUG:
             st.warning(f"get_user failed: {e}")
-        return None
+    return None
 
 # ========= Auth UI =========
 def auth_ui():
@@ -75,19 +89,24 @@ def auth_ui():
                 try:
                     res = supabase.auth.sign_in_with_password({"email": email, "password": password})
                     if DEBUG:
-                        st.code(f"AUTH RESPONSE (login): {res}", language="text")
+                        st.caption("AUTH RESPONSE (login)")
                         st.json({
-                            "res.user": getattr(res, "user", None).__dict__ if getattr(res, "user", None) else None,
-                            "res.session_present": bool(getattr(res, "session", None)),
+                            "res_user_email": getattr(getattr(res, "user", None), "email", None),
+                            "session_present": bool(getattr(res, "session", None)),
                         })
-                    if res.session:
+                    if getattr(res, "session", None):
+                        # Save tokens + session and cache user identity
                         save_tokens_from_session(res.session)
                         supabase.auth.set_session(res.session.access_token, res.session.refresh_token)
+                        user = getattr(res, "user", None)
+                        if user:
+                            st.session_state["user_id"] = user.id
+                            st.session_state["user_email"] = user.email
                         st.session_state.session_restored = True
                         st.success("Logged in.")
                         st.rerun()
                     else:
-                        st.error("No session returned. Check email confirmation setting or password.")
+                        st.error("No session returned. Check password or disable email confirmation in Supabase → Auth → Providers.")
                 except Exception as e:
                     st.error(f"Login failed: {e}")
 
@@ -101,14 +120,18 @@ def auth_ui():
                 try:
                     res = supabase.auth.sign_up({"email": email, "password": password})
                     if DEBUG:
-                        st.code(f"AUTH RESPONSE (signup): {res}", language="text")
+                        st.caption("AUTH RESPONSE (signup)")
                         st.json({
-                            "res.user": getattr(res, "user", None).__dict__ if getattr(res, "user", None) else None,
-                            "res.session_present": bool(getattr(res, "session", None)),
+                            "res_user_email": getattr(getattr(res, "user", None), "email", None),
+                            "session_present": bool(getattr(res, "session", None)),
                         })
                     if getattr(res, "session", None):
                         save_tokens_from_session(res.session)
                         supabase.auth.set_session(res.session.access_token, res.session.refresh_token)
+                        user = getattr(res, "user", None)
+                        if user:
+                            st.session_state["user_id"] = user.id
+                            st.session_state["user_email"] = user.email
                         st.session_state.session_restored = True
                         st.success("Account created and logged in.")
                         st.rerun()
@@ -122,7 +145,7 @@ def topbar(user):
     cols = st.columns([2, 2, 1, 1])
     with cols[0]:
         st.caption("Signed in as")
-        st.write(f"**{user.email}**")
+        st.write(f"**{user['email']}**")
     with cols[2]:
         if st.button("Refresh"):
             st.rerun()
@@ -151,7 +174,7 @@ def add_set_form(user):
                     st.warning("Exercise is required.")
                 else:
                     supabase.table("workout_sets").insert({
-                        "user_id": user.id,
+                        "user_id": user["id"],
                         "date": str(date),
                         "exercise": exercise.strip(),
                         "reps": int(reps),
@@ -168,7 +191,7 @@ def list_sets(user):
     try:
         data = (supabase.table("workout_sets")
                 .select("*")
-                .eq("user_id", user.id)
+                .eq("user_id", user["id"])
                 .order("date", desc=True)
                 .order("created_at", desc=True)
                 .execute().data) or []
@@ -192,7 +215,7 @@ def list_sets(user):
             with btn_col:
                 if st.button("Delete", key=f"del_{row['id']}"):
                     try:
-                        supabase.table("workout_sets").delete().eq("id", row["id"]).eq("user_id", user.id).execute()
+                        supabase.table("workout_sets").delete().eq("id", row["id"]).eq("user_id", user["id"]).execute()
                         st.success("Deleted.")
                         st.rerun()
                     except Exception as e:
@@ -209,7 +232,8 @@ if DEBUG:
         "cookie_has_access_token": bool(cookies.get("access_token")),
         "cookie_has_refresh_token": bool(cookies.get("refresh_token")),
         "session_restored_flag": st.session_state.get("session_restored"),
-        "current_user_email": getattr(user, "email", None),
+        "current_user_email": user and user.get("email"),
+        "cached_user_id": st.session_state.get("user_id"),
     })
 
 if not user:
