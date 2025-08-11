@@ -174,13 +174,13 @@ def add_set_form(user):
                     st.warning("Exercise is required.")
                 else:
                     supabase.table("workout_sets").insert({
-                        "user_id": user["id"],
-                        "date": str(date),
-                        "exercise": exercise.strip(),
-                        "reps": int(reps),
-                        "weight": float(weight),
-                        "notes": notes.strip() if notes else None,
+                        "date": date,
+                        "exercise": exercise,
+                        "reps": reps,
+                        "weight": weight,
+                        "notes": notes
                     }).execute()
+
                     st.success("Set added.")
                     st.rerun()
             except Exception as e:
