@@ -3,33 +3,49 @@ import streamlit as st
 from supabase import create_client, Client
 from st_cookies_manager import EncryptedCookieManager
 
-# ========= Config =========
+# ==============================
+# App config
+# ==============================
 st.set_page_config(page_title="Workout Tracker", page_icon="💪", layout="centered")
-DEBUG = True  # set False after it works
+DEBUG = True  # set to False after everything works
 
-# Read from Streamlit Secrets
+# ==============================
+# Secrets (Streamlit Cloud → Settings → Secrets)
+# ==============================
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "")
 SUPABASE_ANON_KEY = st.secrets.get("SUPABASE_ANON_KEY", "")
 COOKIE_PASSWORD = st.secrets.get("COOKIE_PASSWORD", "change-this")
-COOKIE_PREFIX = "wtapp_"
+COOKIE_PREFIX = "wtapp_"  # prevents clashes between apps
 
 if not SUPABASE_URL or not SUPABASE_ANON_KEY:
     st.error("Missing SUPABASE_URL or SUPABASE_ANON_KEY in Secrets.")
     st.stop()
 
-# ========= Clients & Cookies =========
+# ==============================
+# Supabase client + Cookies
+# ==============================
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+def _bind_postgrest_jwt(access_token: str):
+    """Ensure PostgREST calls (table/select/insert) carry the auth header."""
+    try:
+        supabase.postgrest.auth(access_token)
+    except Exception as e:
+        if DEBUG:
+            st.warning(f"postgrest auth bind failed: {e}")
 
 cookies = EncryptedCookieManager(prefix=COOKIE_PREFIX, password=COOKIE_PASSWORD)
 if not cookies.ready():
-    st.stop()
+    st.stop()  # wait for component to initialize
 
 def save_tokens_from_session(sess):
+    """Persist tokens in cookie and bind JWT to PostgREST."""
     if not sess:
         return
     cookies["access_token"] = sess.access_token
     cookies["refresh_token"] = sess.refresh_token
     cookies.save()
+    _bind_postgrest_jwt(sess.access_token)
 
 def clear_tokens():
     for k in ("access_token", "refresh_token"):
@@ -41,11 +57,13 @@ def clear_tokens():
             del st.session_state[k]
 
 def restore_session():
+    """Restore Supabase session from cookie and bind JWT."""
     at = cookies.get("access_token")
     rt = cookies.get("refresh_token")
     if at and rt:
         try:
-            supabase.auth.set_session(at, rt)  # (access, refresh)
+            supabase.auth.set_session(at, rt)  # v2: (access, refresh)
+            _bind_postgrest_jwt(at)
             return True
         except Exception as e:
             if DEBUG:
@@ -56,13 +74,15 @@ def restore_session():
 if "session_restored" not in st.session_state:
     st.session_state.session_restored = restore_session()
 
-# Robust "current user": prefer what we stored at login
+# ==============================
+# Current user (cached)
+# ==============================
 def get_current_user():
     uid = st.session_state.get("user_id")
     email = st.session_state.get("user_email")
     if uid and email:
         return {"id": uid, "email": email}
-    # Fallback: try Supabase (may be None on some builds)
+    # Fallback: ask Supabase once
     try:
         res = supabase.auth.get_user()
         user = getattr(res, "user", None)
@@ -75,11 +95,13 @@ def get_current_user():
             st.warning(f"get_user failed: {e}")
     return None
 
-# ========= Auth UI =========
+# ==============================
+# Auth UI
+# ==============================
 def auth_ui():
     tabs = st.tabs(["Log in", "Sign up"])
 
-    # Login
+    # ---- Log in ----
     with tabs[0]:
         with st.form("login_form"):
             email = st.text_input("Email")
@@ -95,7 +117,6 @@ def auth_ui():
                             "session_present": bool(getattr(res, "session", None)),
                         })
                     if getattr(res, "session", None):
-                        # Save tokens + session and cache user identity
                         save_tokens_from_session(res.session)
                         supabase.auth.set_session(res.session.access_token, res.session.refresh_token)
                         user = getattr(res, "user", None)
@@ -106,11 +127,11 @@ def auth_ui():
                         st.success("Logged in.")
                         st.rerun()
                     else:
-                        st.error("No session returned. Check password or disable email confirmation in Supabase → Auth → Providers.")
+                        st.error("No session returned. If email confirmation is ON, confirm it or turn it OFF (Auth → Providers).")
                 except Exception as e:
                     st.error(f"Login failed: {e}")
 
-    # Signup
+    # ---- Sign up ----
     with tabs[1]:
         with st.form("signup_form"):
             email = st.text_input("Email", key="su_email")
@@ -136,11 +157,13 @@ def auth_ui():
                         st.success("Account created and logged in.")
                         st.rerun()
                     else:
-                        st.success("Account created. Check your email to confirm or turn OFF ‘Confirm email’.")
+                        st.success("Account created. Check your email to confirm, or turn OFF confirmation while testing.")
                 except Exception as e:
                     st.error(f"Sign up failed: {e}")
 
-# ========= App UI =========
+# ==============================
+# App UI
+# ==============================
 def topbar(user):
     cols = st.columns([2, 2, 1, 1])
     with cols[0]:
@@ -173,29 +196,32 @@ def add_set_form(user):
                 if not exercise.strip():
                     st.warning("Exercise is required.")
                 else:
-                    supabase.table("workout_sets").insert({
-                        # user_id is set by DB default auth.uid()
-                        "date": date.isoformat(),                 # <-- convert to string
+                    # DO NOT send user_id; DB default uses auth.uid()
+                    payload = {
+                        "date": date.isoformat(),                     # string for JSON
                         "exercise": exercise.strip(),
                         "reps": int(reps),
                         "weight": float(weight),
                         "notes": notes.strip() if notes else None,
-                    }).execute()
+                    }
+                    supabase.table("workout_sets").insert(payload).execute()
                     st.success("Set added.")
                     st.rerun()
             except Exception as e:
                 st.error(f"Could not add set: {e}")
 
-
 def list_sets(user):
     st.subheader("Your Workout Sets")
     try:
-        data = (supabase.table("workout_sets")
-                .select("*")
-                .eq("user_id", user["id"])
-                .order("date", desc=True)
-                .order("created_at", desc=True)
-                .execute().data) or []
+        data = (
+            supabase.table("workout_sets")
+            .select("*")
+            .order("date", desc=True)
+            .order("created_at", desc=True)
+            .execute()
+            .data
+            or []
+        )
     except Exception as e:
         st.error(f"Error loading sets: {e}")
         data = []
@@ -216,24 +242,27 @@ def list_sets(user):
             with btn_col:
                 if st.button("Delete", key=f"del_{row['id']}"):
                     try:
-                        supabase.table("workout_sets").delete().eq("id", row["id"]).eq("user_id", user["id"]).execute()
+                        supabase.table("workout_sets").delete().eq("id", row["id"]).execute()
                         st.success("Deleted.")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Delete failed: {e}")
 
-# ========= Render =========
+# ==============================
+# Render
+# ==============================
 st.title("🏋️ Workout Tracker")
 
 user = get_current_user()
 
+# Small debug panel to verify session/cookies
 if DEBUG:
     st.caption("🔎 Debug")
     st.json({
         "cookie_has_access_token": bool(cookies.get("access_token")),
         "cookie_has_refresh_token": bool(cookies.get("refresh_token")),
         "session_restored_flag": st.session_state.get("session_restored"),
-        "current_user_email": user and user.get("email"),
+        "cached_user_email": st.session_state.get("user_email"),
         "cached_user_id": st.session_state.get("user_id"),
     })
 
@@ -243,7 +272,6 @@ else:
     topbar(user)
     add_set_form(user)
     list_sets(user)
-
 
 
 
