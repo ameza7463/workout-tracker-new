@@ -1,149 +1,216 @@
-import streamlit as st
-import pandas as pd
-import datetime
-import uuid
 import os
-import time
+import datetime
+import streamlit as st
 from supabase import create_client, Client
-from st_cookie_manager import CookieManager
+from st_cookies_manager import EncryptedCookieManager
 
+# ---------- Config ----------
+st.set_page_config(page_title="Workout Tracker", page_icon="💪", layout="centered")
 
-# --- Page config ---
-st.set_page_config(page_title="Workout Tracker", layout="centered")
-st.title("🏋️ Workout Tracker")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
+COOKIE_PASSWORD = os.environ.get("COOKIE_PASSWORD", "change-this-in-prod")
+COOKIE_PREFIX = "wtapp_"  # avoids clashes on Streamlit Cloud
 
-# --- Supabase setup ---
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# --- Cookie manager ---
-from st_cookie_manager import CookieManager
-
-cookie_manager = CookieManager()
-
-try:
-    access_token = cookie_manager.get("access_token")
-except Exception:
-    access_token = None
-
-try:
-    refresh_token = cookie_manager.get("refresh_token")
-except Exception:
-    refresh_token = None
-
-
-
-if access_token and refresh_token:
-    try:
-        session_response = supabase.auth.set_session(access_token, refresh_token)
-        if session_response.user:
-            st.session_state.user = session_response.user
-            st.session_state.access_token = access_token
-            st.session_state.refresh_token = refresh_token
-    except Exception as e:
-        print("Failed to restore session:", e)
-
-# --- Login ---
-if "user" not in st.session_state:
-    st.subheader("🔐 Login to Continue")
-    email = st.text_input("Email", key="login_email")
-    password = st.text_input("Password", type="password", key="login_password")
-    col1, col2 = st.columns(2)
-
-    if col1.button("Login"):
-        try:
-            auth_response = supabase.auth.sign_in_with_password({
-                "email": email,
-                "password": password
-            })
-            if auth_response.session and auth_response.user:
-                st.session_state.user = auth_response.user
-                st.session_state.access_token = auth_response.session.access_token
-                st.session_state.refresh_token = auth_response.session.refresh_token
-                cookie_manager.set("access_token", auth_response.session.access_token)
-                cookie_manager.set("refresh_token", auth_response.session.refresh_token)
-                st.success(f"Logged in as {st.session_state.user.email}")
-                time.sleep(1)
-                st.rerun()
-            else:
-                st.error("Login failed. Check credentials.")
-        except Exception as e:
-            st.error(f"Login error: {e}")
-
-    if col2.button("Sign Up"):
-        try:
-            supabase.auth.sign_up({"email": email, "password": password})
-            st.success("Account created. Please login.")
-        except Exception as e:
-            st.error(f"Signup failed: {e}")
-
+if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+    st.error("Missing SUPABASE_URL or SUPABASE_ANON_KEY environment variables.")
     st.stop()
 
-# --- Main App after login ---
-user_id = st.session_state.user.id
-if "current_exercises" not in st.session_state:
-    st.session_state.current_exercises = []
+# ---------- Init Supabase ----------
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
-# --- Add Exercise ---
-st.subheader("➕ Add Exercise")
-exercise_name = st.text_input("Exercise Name")
-reps = st.number_input("Reps", min_value=1, step=1)
-weight = st.number_input("Weight (lbs)", min_value=0, step=1)
+# ---------- Cookies (tokens) ----------
+cookies = EncryptedCookieManager(prefix=COOKIE_PREFIX, password=COOKIE_PASSWORD)
+if not cookies.ready():
+    st.stop()  # Wait for component to load
 
-if st.button("Add Set"):
-    if exercise_name:
-        st.session_state.current_exercises.append({
-            "exercise": exercise_name,
-            "reps": reps,
-            "weight": weight
-        })
-        st.success("Set added!")
+def save_tokens(session):
+    if not session:
+        return
+    cookies["access_token"] = session.access_token
+    cookies["refresh_token"] = session.refresh_token
+    cookies.save()
 
-# --- View Current Session ---
-if st.session_state.current_exercises:
-    st.markdown("### 📜 Current Workout")
-    for idx, ex in enumerate(st.session_state.current_exercises):
-        st.write(f"• {ex['exercise']} - {ex['reps']} reps @ {ex['weight']} lbs")
-        if st.button(f"❌ Remove", key=f"del_{idx}"):
-            st.session_state.current_exercises.pop(idx)
+def clear_tokens():
+    for k in ("access_token", "refresh_token"):
+        if k in cookies:
+            del cookies[k]
+    cookies.save()
+
+def restore_session():
+    """Restore Supabase session from cookies (if present)."""
+    at = cookies.get("access_token")
+    rt = cookies.get("refresh_token")
+    if at and rt:
+        try:
+            supabase.auth.set_session(at, rt)  # v2 API: set_session(access, refresh)
+            return True
+        except Exception:
+            # tokens invalid/expired — clear them
+            clear_tokens()
+    return False
+
+# Try to restore a session once per run
+if "session_restored" not in st.session_state:
+    st.session_state.session_restored = restore_session()
+
+# ---------- Helpers ----------
+def get_current_user():
+    try:
+        res = supabase.auth.get_user()
+        return res.user
+    except Exception:
+        return None
+
+def require_auth():
+    user = get_current_user()
+    if user is None:
+        st.stop()
+    return user
+
+# ---------- Auth UI ----------
+def auth_ui():
+    tabs = st.tabs(["Log in", "Sign up"])
+    with tabs[0]:
+        with st.form("login_form", clear_on_submit=False):
+            email = st.text_input("Email", key="login_email")
+            password = st.text_input("Password", type="password", key="login_pw")
+            submitted = st.form_submit_button("Log in")
+            if submitted:
+                try:
+                    res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                    save_tokens(res.session)
+                    st.success("Logged in.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Login failed: {e}")
+
+    with tabs[1]:
+        with st.form("signup_form", clear_on_submit=False):
+            email = st.text_input("Email", key="signup_email")
+            password = st.text_input("Password (min 6 chars)", type="password", key="signup_pw")
+            submitted = st.form_submit_button("Create account")
+            if submitted:
+                try:
+                    res = supabase.auth.sign_up({"email": email, "password": password})
+                    # Some projects require email confirmation before a session exists.
+                    if res.session:
+                        save_tokens(res.session)
+                        st.success("Account created and logged in.")
+                    else:
+                        st.success("Account created. Please check your email to confirm, then log in.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Sign up failed: {e}")
+
+# ---------- App UI (after login) ----------
+def topbar(user):
+    cols = st.columns([1, 1, 1, 2])
+    with cols[0]:
+        st.caption(f"Signed in as:")
+        st.write(f"**{user.email}**")
+    with cols[2]:
+        if st.button("Refresh"):
+            st.rerun()
+    with cols[3]:
+        if st.button("Log out", use_container_width=True):
+            try:
+                supabase.auth.sign_out()
+            except Exception:
+                pass
+            clear_tokens()
+            st.success("Logged out.")
             st.rerun()
 
-# --- Save Workout to Supabase ---
-if st.button("📂 Save Workout"):
-    if st.session_state.current_exercises:
-        supabase.auth.set_session(st.session_state.access_token, st.session_state.refresh_token)
+def add_set_form(user):
+    st.subheader("Add Workout Set")
+    with st.form("add_set_form", clear_on_submit=True):
+        date = st.date_input("Date", value=datetime.date.today())
+        exercise = st.text_input("Exercise", placeholder="e.g., Incline DB Press")
+        reps = st.number_input("Reps", min_value=1, max_value=1000, value=8, step=1)
+        weight = st.number_input("Weight", min_value=0.0, max_value=2000.0, value=135.0, step=2.5)
+        notes = st.text_area("Notes", placeholder="Optional")
+        submitted = st.form_submit_button("Add set")
+        if submitted:
+            try:
+                payload = {
+                    "user_id": user.id,
+                    "date": str(date),
+                    "exercise": exercise.strip(),
+                    "reps": int(reps),
+                    "weight": float(weight),
+                    "notes": notes.strip() if notes else None,
+                }
+                if not payload["exercise"]:
+                    st.warning("Exercise is required.")
+                else:
+                    supabase.table("workout_sets").insert(payload).execute()
+                    st.success("Set added.")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Could not add set: {e}")
 
-        supabase.table("workouts").insert({
-            "user_id": user_id,
-            "date": str(datetime.date.today()),
-            "exercises": st.session_state.current_exercises
-        }).execute()
-        st.success("Workout saved!")
-        st.session_state.current_exercises = []
-    else:
-        st.warning("No exercises to save.")
+def list_sets(user):
+    st.subheader("Your Workout Sets")
+    try:
+        query = (
+            supabase.table("workout_sets")
+            .select("*")
+            .eq("user_id", user.id)
+            .order("date", desc=True)
+            .order("created_at", desc=True)
+        )
+        data = query.execute().data or []
+    except Exception as e:
+        st.error(f"Error loading sets: {e}")
+        data = []
 
-# --- Load Workouts ---
-st.subheader("📋 Workout History")
-res = supabase.table("workouts").select("*").eq("user_id", user_id).order("date", desc=True).execute()
-if res.data:
-    for w in res.data:
-        with st.expander(w["date"]):
-            for ex in w["exercises"]:
-                try:
-                    st.write(f"{ex['exercise']} - {ex['reps']} reps @ {ex['weight']} lbs")
-                except KeyError:
-                    st.error("⚠️ Skipped broken workout entry. Some fields were missing.")
+    if not data:
+        st.info("No sets yet. Add your first set above.")
+        return
 
-# --- Logout ---
-if st.button("Logout"):
-    cookie_manager.delete("access_token")
-    cookie_manager.delete("refresh_token")
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
-    st.success("Logged out.")
-    st.rerun()
+    # Simple table with delete actions
+    for row in data:
+        with st.container(border=True):
+            cols = st.columns([2, 3, 1, 1, 3])
+            cols[0].markdown(f"**{row.get('date','')}**")
+            cols[1].markdown(f"**{row.get('exercise','')}**")
+            cols[2].markdown(f"Reps: **{row.get('reps','')}**")
+            cols[3].markdown(f"Weight: **{row.get('weight','')}**")
+            cols[4].markdown(row.get("notes") or "")
+            del_col = st.columns([8, 2])[1]
+            with del_col:
+                if st.button("Delete", key=f"del_{row['id']}"):
+                    try:
+                        supabase.table("workout_sets").delete().eq("id", row["id"]).eq("user_id", user.id).execute()
+                        st.success("Deleted.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Delete failed: {e}")
+
+# ---------- Render ----------
+st.title("🏋️ Workout Tracker")
+
+user = get_current_user()
+if not user:
+    auth_ui()
+else:
+    topbar(user)
+    add_set_form(user)
+    list_sets(user)
+
+# ---------- DB schema note (for reference only) ----------
+# Expect a Supabase table named: workout_sets
+# Columns (recommended):
+# id: uuid primary key default gen_random_uuid()
+# user_id: uuid (index) -> references auth.users(id)
+# date: date not null
+# exercise: text not null
+# reps: int4 not null
+# weight: float8 not null
+# notes: text
+# created_at: timestamptz default now()
+
 
 
 
